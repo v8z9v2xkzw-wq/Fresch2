@@ -1,10 +1,10 @@
 # Mini-FRESCH-KI-Tutor
 # Streamlit Web-App – Foto hochladen, FRESCH-Rechtschreibung auswerten
-# Website-Version OHNE Tesseract (OCR über OpenAI Vision)
+# Website-Version mit OpenAI (API v1) + Vision + PIN-geschütztem Lehrer-Modus
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-import openai
+from openai import OpenAI
 import json
 import base64
 from io import BytesIO
@@ -14,7 +14,7 @@ from io import BytesIO
 # ============================
 st.set_page_config(page_title="FRESCH KI-Tutor", layout="centered")
 
-openai.api_key = st.secrets.get("OPENAI_API_KEY", "")
+client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
 LEHRER_PIN = st.secrets.get("LEHRER_PIN", "1234")
 
 # ============================
@@ -29,40 +29,40 @@ FRESCH_SYMBOLS = {
 }
 
 # ============================
-# OPENAI VISION OCR
+# HILFSFUNKTION: Bild → Base64
 # ============================
 def image_to_base64(image: Image.Image) -> str:
     buffered = BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
-
+# ============================
+# OCR ÜBER OPENAI VISION (API v1)
+# ============================
 def ocr_text_via_openai(image: Image.Image) -> str:
     img_b64 = image_to_base64(image)
 
-    prompt = (
-        "Lies den handgeschriebenen deutschen Text auf dem Bild. "
-        "Gib NUR den reinen Text zurück, ohne Kommentare."
-    )
-
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[
+    response = client.responses.create(
+        model="gpt-4.1",
+        input=[
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                    {"type": "input_text", "text": "Lies den handgeschriebenen deutschen Text. Gib nur den reinen Text zurück."},
+                    {
+                        "type": "input_image",
+                        "image_base64": img_b64,
+                    },
                 ],
             }
         ],
-        max_tokens=800,
+        max_output_tokens=800,
     )
 
-    return response.choices[0].message.content.strip()
+    return response.output_text.strip()
 
 # ============================
-# OPENAI – FRESCH-ANALYSE
+# OPENAI – FRESCH-ANALYSE (Text → JSON)
 # ============================
 def fresch_analysis(text: str):
     prompt = f"""
@@ -97,13 +97,14 @@ Text:
 {text}
 """
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=prompt,
         temperature=0.1,
+        max_output_tokens=800,
     )
 
-    return json.loads(response.choices[0].message.content)
+    return json.loads(response.output_text)
 
 # ============================
 # BILD MARKIEREN + SILBENBÖGEN
