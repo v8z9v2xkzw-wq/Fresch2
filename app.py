@@ -1,12 +1,13 @@
 # Mini-FRESCH-KI-Tutor
 # Streamlit Web-App – Foto hochladen, FRESCH-Rechtschreibung auswerten
-# Website-Version mit OpenAI + PIN-geschütztem Lehrer-Modus
+# Website-Version OHNE Tesseract (OCR über OpenAI Vision)
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-import pytesseract
 import openai
 import json
+import base64
+from io import BytesIO
 
 # ============================
 # GRUNDKONFIGURATION
@@ -28,10 +29,37 @@ FRESCH_SYMBOLS = {
 }
 
 # ============================
-# OCR
+# OPENAI VISION OCR
 # ============================
-def ocr_text(image: Image.Image) -> str:
-    return pytesseract.image_to_string(image, lang="deu")
+def image_to_base64(image: Image.Image) -> str:
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode()
+
+
+def ocr_text_via_openai(image: Image.Image) -> str:
+    img_b64 = image_to_base64(image)
+
+    prompt = (
+        "Lies den handgeschriebenen deutschen Text auf dem Bild. "
+        "Gib NUR den reinen Text zurück, ohne Kommentare."
+    )
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                ],
+            }
+        ],
+        max_tokens=800,
+    )
+
+    return response.choices[0].message.content.strip()
 
 # ============================
 # OPENAI – FRESCH-ANALYSE
@@ -49,10 +77,10 @@ WICHTIG:
 - KEINE Korrekturen hinschreiben, nur Hinweise.
 
 Erlaubte Strategien:
-- Silbe klatschen (Rhythmus hören)
-- Weiterschwingen (Vokal verlängern)
-- Stopp-Regel (Doppelkonsonanten, ck, tz)
-- Ableiten (Wortfamilie)
+- Silbe klatschen
+- Weiterschwingen
+- Stopp-Regel
+- Ableiten
 - Merkwort
 
 Gib das Ergebnis AUSSCHLIESSLICH als JSON zurück:
@@ -72,7 +100,7 @@ Text:
     response = openai.ChatCompletion.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
+        temperature=0.1,
     )
 
     return json.loads(response.choices[0].message.content)
@@ -112,7 +140,6 @@ def annotate_image(image, feedback, fokus_regel=None):
 st.title("✏️ FRESCH KI-Tutor")
 
 modus = "👧 Kind"
-
 with st.expander("👩‍🏫 Lehrkraft"):
     pin = st.text_input("PIN", type="password")
     if pin == LEHRER_PIN:
@@ -123,7 +150,7 @@ fokus_regel = None
 if modus == "👧 Kind":
     fokus_regel = st.selectbox(
         "🎯 Wir üben heute nur eine Strategie:",
-        list(FRESCH_SYMBOLS.keys())
+        list(FRESCH_SYMBOLS.keys()),
     )
 
 st.markdown("## 📸 Mach ein Foto von deinem Text")
@@ -138,7 +165,7 @@ if uploaded:
 
     if st.button("🔍 Auswerten"):
         with st.spinner("Ich schaue mir deinen Text an …"):
-            text = ocr_text(image)
+            text = ocr_text_via_openai(image)
             feedback = fresch_analysis(text)
             result_image = annotate_image(image, feedback, fokus_regel)
 
