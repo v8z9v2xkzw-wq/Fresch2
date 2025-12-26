@@ -20,12 +20,15 @@ LEHRER_PIN = st.secrets.get("LEHRER_PIN", "1234")
 # ============================
 # FRESCH-SYMBOLE (nach Michel/Braun)
 # ============================
-FRESCH_SYMBOLS = {
-    "Silbe klatschen": "👏",
-    "Weiterschwingen": "➰",
-    "Stopp-Regel": "⛔",
-    "Ableiten": "🔁",
-    "Merkwort": "⭐",
+# ============================
+# FRESCH-ICONS (Original-Bildsymbole)
+# ============================
+FRESCH_ICONS = {
+    "Silbe klatschen": "ableiten.png",
+    "Weiterschwingen": "merkwörter.png",
+    "Stopp-Regel": "Groß und Kleinschreibung.png",
+    "Ableiten": "ableiten.png",
+    "Merkwort": "merkwörter.png",
 }
 
 # ============================
@@ -110,28 +113,24 @@ Text:
 # BILD MARKIEREN + SILBENBÖGEN
 # ============================
 def annotate_image(image, feedback, fokus_regel=None):
-    img = image.copy().convert("RGB")
-    draw = ImageDraw.Draw(img)
+    img = image.copy().convert("RGBA")
 
-    try:
-        font = ImageFont.truetype("arial.ttf", 32)
-    except:
-        font = ImageFont.load_default()
-
-    y = 10
+    y = 20
     for item in feedback:
         if not item.get("fehler"):
             continue
         if fokus_regel and item.get("regel") != fokus_regel:
             continue
 
-        symbol = FRESCH_SYMBOLS.get(item.get("regel"), "❓")
-        draw.text((10, y), f"{symbol} {item['wort']}", fill="red", font=font)
-
-        if item.get("regel") == "Silbe klatschen":
-            draw.arc((10, y + 35, 220, y + 70), start=0, end=180, fill="blue", width=3)
-
-        y += 80
+        icon_path = FRESCH_ICONS.get(item.get("regel"))
+        if icon_path:
+            try:
+                icon = Image.open(icon_path).convert("RGBA")
+                icon = icon.resize((80, 80))
+                img.paste(icon, (20, y), icon)
+                y += 100
+            except:
+                pass
 
     return img
 
@@ -151,7 +150,7 @@ fokus_regel = None
 if modus == "👧 Kind":
     fokus_regel = st.selectbox(
         "🎯 Wir üben heute nur eine Strategie:",
-        list(FRESCH_SYMBOLS.keys()),
+        list(FRESCH_ICONS.keys()),
     )
 
 st.markdown("## 📸 Mach ein Foto von deinem Text")
@@ -177,7 +176,7 @@ if uploaded:
             st.subheader("📘 Kleine Hilfe")
             for item in feedback:
                 if item.get("fehler") and (not fokus_regel or item.get("regel") == fokus_regel):
-                    st.write(f"{FRESCH_SYMBOLS.get(item['regel'], '')} {item['erklaerung']}")
+                    st.write(f"{FRESCH_ICONS.get(item['regel'], '')} {item['erklaerung']}")
 
         if modus == "👩‍🏫 Lehrkraft":
             st.subheader("📊 FRESCH-Auswertung")
@@ -188,4 +187,4 @@ if uploaded:
                     stats[regel] = stats.get(regel, 0) + 1
 
             for regel, anzahl in stats.items():
-                st.write(f"{FRESCH_SYMBOLS.get(regel, '')} **{regel}**: {anzahl}×")
+                st.write(f"{FRESCH_ICONS.get(regel, '')} **{regel}**: {anzahl}×")
