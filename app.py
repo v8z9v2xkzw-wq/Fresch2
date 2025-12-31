@@ -1,20 +1,21 @@
 import streamlit as st
-from PIL import Image, ImageDraw
-from openai import OpenAI
-import json
+from PIL import Image
+from openai import OpenAI, RateLimitError
 import base64
+import json
+import time
 from io import BytesIO
 
 # ============================
-# GRUNDKONFIGURATION
+# KONFIGURATION
 # ============================
 st.set_page_config(page_title="FRESCH KI-Tutor", layout="centered")
 
-client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 LEHRER_PIN = st.secrets.get("LEHRER_PIN", "1234")
 
 # ============================
-# FRESCH-ICONS (Dateien im Repo!)
+# FRESCH-ICONS (Dateien im Repo)
 # ============================
 FRESCH_ICONS = {
     "Silbe klatschen": "ableiten.png",
@@ -25,26 +26,23 @@ FRESCH_ICONS = {
 }
 
 # ============================
-# Bild → Base64
+# BILD → BASE64
 # ============================
-def image_to_base64(image: Image.Image) -> str:
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode()
+def image_to_base64(img: Image.Image) -> str:
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
 
 # ============================
-# OCR ÜBER OPENAI VISION (FINAL)
+# OCR (CACHED + RATE-LIMIT-SICHER)
 # ============================
-import time
-from openai import RateLimitError
-
 @st.cache_data(show_spinner=False)
-def ocr_text_via_openai_cached(image_bytes: bytes) -> str:
+def ocr_text_cached(image_bytes: bytes) -> str:
     img = Image.open(BytesIO(image_bytes))
-    img_b64 = image_to_base64(img)
-    data_url = f"data:image/png;base64,{img_b64}"
+    b64 = image_to_base64(img)
+    data_url = f"data:image/png;base64,{b64}"
 
-    for attempt in range(3):
+    for _ in range(3):
         try:
             response = client.responses.create(
                 model="gpt-4o-mini",
@@ -67,9 +65,8 @@ def ocr_text_via_openai_cached(image_bytes: bytes) -> str:
                 max_output_tokens=600
             )
             return response.output_text.strip()
-
         except RateLimitError:
-            time.sleep(2)  # kurz warten und erneut versuchen
+            time.sleep(2)
 
     raise RuntimeError("OCR momentan überlastet. Bitte kurz warten.")
 
@@ -78,15 +75,15 @@ def ocr_text_via_openai_cached(image_bytes: bytes) -> str:
 # ============================
 def fresch_analysis(text: str):
     prompt = f"""
-Du bist eine erfahrene Grundschullehrkraft und arbeitest streng nach der
-FRESCH-Methode (Freiburger Rechtschreibschule nach H.-J. Michel).
+Du bist eine Grundschullehrkraft und arbeitest streng nach der
+FRESCH-Methode (nach Michel).
 
 REGELN:
-- Beurteile NUR Rechtschreibung
-- KEINE klassischen Regeln
-- NUR FRESCH-Strategien
-- kindgerecht, wertschätzend
-- KEINE Korrekturen
+- Nur Rechtschreibung
+- Keine klassischen Regeln
+- Nur FRESCH-Strategien
+- Kindgerecht
+- Keine Korrekturen
 
 Strategien:
 - Silbe klatschen
@@ -95,7 +92,7 @@ Strategien:
 - Ableiten
 - Merkwort
 
-ANTWORT NUR ALS JSON:
+Antwort NUR als JSON:
 [
   {{
     "wort": "Beispiel",
@@ -119,25 +116,24 @@ Text:
     return json.loads(response.output_text)
 
 # ============================
-# BILD MIT ICONS MARKIEREN
+# ICONS INS BILD
 # ============================
-def annotate_image(image, feedback, fokus_regel=None):
+def annotate_image(image: Image.Image, feedback, fokus=None):
     img = image.copy().convert("RGBA")
     y = 20
 
     for item in feedback:
         if not item.get("fehler"):
             continue
-        if fokus_regel and item["regel"] != fokus_regel:
+        if fokus and item["regel"] != fokus:
             continue
 
-        icon_path = FRESCH_ICONS.get(item["regel"])
-        if not icon_path:
+        icon_file = FRESCH_ICONS.get(item["regel"])
+        if not icon_file:
             continue
 
         try:
-            icon = Image.open(icon_path).convert("RGBA")
-            icon = icon.resize((80, 80))
+            icon = Image.open(icon_file).convert("RGBA").resize((80, 80))
             img.paste(icon, (20, y), icon)
             y += 100
         except:
@@ -157,22 +153,20 @@ with st.expander("👩‍🏫 Lehrkraft"):
         modus = "👩‍🏫 Lehrkraft"
         st.success("Lehrermodus aktiv")
 
-fokus_regel = None
+fokus = None
 if modus == "👧 Kind":
-    fokus_regel = st.selectbox(
-        "🎯 Wir üben heute eine Strategie:",
+    fokus = st.selectbox(
+        "🎯 Wir üben heute nur eine Strategie:",
         list(FRESCH_ICONS.keys())
     )
 
-st.markdown("## 📸 Foto hochladen")
 uploaded = st.file_uploader(
-    "Bild auswählen",
-    type=["png", "jpg", "jpeg"],
-    label_visibility="collapsed"
+    "📸 Foto vom Text hochladen",
+    type=["png", "jpg", "jpeg"]
 )
 
 # ============================
-# VERARBEITUNG
+# AUSWERTUNG
 # ============================
 if uploaded:
     image = Image.open(uploaded)
@@ -180,25 +174,24 @@ if uploaded:
 
     if st.button("🔍 Auswerten"):
         with st.spinner("Ich schaue mir deinen Text an …"):
-            text = ocr_text_via_openai(image)
+            text = ocr_text_cached(uploaded.getvalue())
             feedback = fresch_analysis(text)
-            result_image = annotate_image(image, feedback, fokus_regel)
+            result_img = annotate_image(image, feedback, fokus)
 
         st.success("Fertig 😊")
-        st.image(result_image, caption="FRESCH-Feedback", width="stretch")
+        st.image(result_img, caption="FRESCH-Feedback", width="stretch")
 
         if modus == "👧 Kind":
             st.subheader("📘 Kleine Hilfe")
             for item in feedback:
-                if item["fehler"] and (not fokus_regel or item["regel"] == fokus_regel):
+                if item["fehler"] and (not fokus or item["regel"] == fokus):
                     st.write(item["erklaerung"])
 
         if modus == "👩‍🏫 Lehrkraft":
-            st.subheader("📊 Auswertung")
+            st.subheader("📊 Übersicht")
             stats = {}
             for item in feedback:
                 if item["fehler"]:
                     stats[item["regel"]] = stats.get(item["regel"], 0) + 1
-
             for regel, anzahl in stats.items():
                 st.write(f"{regel}: {anzahl}×")
