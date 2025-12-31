@@ -35,32 +35,43 @@ def image_to_base64(image: Image.Image) -> str:
 # ============================
 # OCR ÜBER OPENAI VISION (FINAL)
 # ============================
-def ocr_text_via_openai(image: Image.Image) -> str:
-    img_b64 = image_to_base64(image)
+import time
+from openai import RateLimitError
+
+@st.cache_data(show_spinner=False)
+def ocr_text_via_openai_cached(image_bytes: bytes) -> str:
+    img = Image.open(BytesIO(image_bytes))
+    img_b64 = image_to_base64(img)
     data_url = f"data:image/png;base64,{img_b64}"
 
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": (
-                        "Lies den handgeschriebenen deutschen Text auf dem Bild. "
-                        "Gib NUR den reinen Text zurück, ohne Kommentare."
-                    )
-                },
-                {
-                    "type": "input_image",
-                    "image_url": data_url
-                }
-            ]
-        }],
-        max_output_tokens=600
-    )
+    for attempt in range(3):
+        try:
+            response = client.responses.create(
+                model="gpt-4o-mini",
+                input=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Lies den handgeschriebenen deutschen Text auf dem Bild. "
+                                "Gib NUR den reinen Text zurück."
+                            )
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": data_url
+                        }
+                    ]
+                }],
+                max_output_tokens=600
+            )
+            return response.output_text.strip()
 
-    return response.output_text.strip()
+        except RateLimitError:
+            time.sleep(2)  # kurz warten und erneut versuchen
+
+    raise RuntimeError("OCR momentan überlastet. Bitte kurz warten.")
 
 # ============================
 # FRESCH-ANALYSE
