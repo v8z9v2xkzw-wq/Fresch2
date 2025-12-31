@@ -12,10 +12,9 @@ from io import BytesIO
 st.set_page_config(page_title="FRESCH KI-Tutor", layout="centered")
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-LEHRER_PIN = st.secrets.get("LEHRER_PIN", "1234")
 
 # ============================
-# FRESCH-ICONS
+# FRESCH-ICONS (Dateien im Repo)
 # ============================
 FRESCH_ICONS = {
     "Silbe klatschen": "ableiten.png",
@@ -26,7 +25,7 @@ FRESCH_ICONS = {
 }
 
 # ============================
-# HILFSFUNKTION
+# BILD → BASE64
 # ============================
 def image_to_base64(img: Image.Image) -> str:
     buf = BytesIO()
@@ -34,7 +33,7 @@ def image_to_base64(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 # ============================
-# OCR (CACHE + SANFTES RETRY)
+# OCR (STILL & STABIL)
 # ============================
 @st.cache_data(show_spinner=False)
 def ocr_text_cached(image_bytes: bytes):
@@ -42,7 +41,7 @@ def ocr_text_cached(image_bytes: bytes):
     b64 = image_to_base64(img)
     data_url = f"data:image/png;base64,{b64}"
 
-    for attempt in range(3):
+    for _ in range(3):
         try:
             response = client.responses.create(
                 model="gpt-4o-mini",
@@ -64,12 +63,11 @@ def ocr_text_cached(image_bytes: bytes):
                 }],
                 max_output_tokens=600
             )
-            return response.output_text.strip(), None
-
+            return response.output_text.strip()
         except RateLimitError:
             time.sleep(2)
 
-    return None, "Die KI ist gerade kurz überlastet. Bitte gleich noch einmal versuchen."
+    return None  # stiller Abbruch, keine Meldung
 
 # ============================
 # FRESCH-ANALYSE
@@ -143,26 +141,17 @@ def annotate_image(image: Image.Image, feedback, fokus=None):
     return img
 
 # ============================
-# UI
+# UI (NUR KINDERANSICHT)
 # ============================
 st.title("✏️ FRESCH KI-Tutor")
 
-modus = "👧 Kind"
-with st.expander("👩‍🏫 Lehrkraft"):
-    pin = st.text_input("PIN", type="password")
-    if pin == LEHRER_PIN:
-        modus = "👩‍🏫 Lehrkraft"
-        st.success("Lehrermodus aktiv")
-
-fokus = None
-if modus == "👧 Kind":
-    fokus = st.selectbox(
-        "🎯 Wir üben heute nur eine Strategie:",
-        list(FRESCH_ICONS.keys())
-    )
+fokus = st.selectbox(
+    "🎯 Wir üben heute nur eine Strategie:",
+    list(FRESCH_ICONS.keys())
+)
 
 uploaded = st.file_uploader(
-    "📸 Foto vom Text hochladen",
+    "📸 Mach ein Foto von deinem Text",
     type=["png", "jpg", "jpeg"]
 )
 
@@ -175,29 +164,15 @@ if uploaded:
 
     if st.button("🔍 Auswerten"):
         with st.spinner("Ich schaue mir deinen Text an …"):
-            text, error = ocr_text_cached(uploaded.getvalue())
+            text = ocr_text_cached(uploaded.getvalue())
 
-        if error:
-            st.warning(error)
-            st.info("💡 Tipp: Warte kurz oder lade das Bild erneut hoch.")
-        else:
+        if text:
             feedback = fresch_analysis(text)
             result_img = annotate_image(image, feedback, fokus)
 
-            st.success("Fertig 😊")
-            st.image(result_img, caption="FRESCH-Feedback", width="stretch")
+            st.image(result_img, caption="Dein Feedback", width="stretch")
 
-            if modus == "👧 Kind":
-                st.subheader("📘 Kleine Hilfe")
-                for item in feedback:
-                    if item["fehler"] and (not fokus or item["regel"] == fokus):
-                        st.write(item["erklaerung"])
-
-            if modus == "👩‍🏫 Lehrkraft":
-                st.subheader("📊 Übersicht")
-                stats = {}
-                for item in feedback:
-                    if item["fehler"]:
-                        stats[item["regel"]] = stats.get(item["regel"], 0) + 1
-                for regel, anzahl in stats.items():
-                    st.write(f"{regel}: {anzahl}×")
+            st.subheader("📘 Kleine Hilfe")
+            for item in feedback:
+                if item["fehler"] and item["regel"] == fokus:
+                    st.write(item["erklaerung"])
