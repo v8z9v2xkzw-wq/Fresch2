@@ -15,7 +15,7 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 LEHRER_PIN = st.secrets.get("LEHRER_PIN", "1234")
 
 # ============================
-# FRESCH-ICONS (Dateien im Repo)
+# FRESCH-ICONS
 # ============================
 FRESCH_ICONS = {
     "Silbe klatschen": "ableiten.png",
@@ -26,7 +26,7 @@ FRESCH_ICONS = {
 }
 
 # ============================
-# BILD → BASE64
+# HILFSFUNKTION
 # ============================
 def image_to_base64(img: Image.Image) -> str:
     buf = BytesIO()
@@ -34,15 +34,15 @@ def image_to_base64(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 # ============================
-# OCR (CACHED + RATE-LIMIT-SICHER)
+# OCR (CACHE + SANFTES RETRY)
 # ============================
 @st.cache_data(show_spinner=False)
-def ocr_text_cached(image_bytes: bytes) -> str:
+def ocr_text_cached(image_bytes: bytes):
     img = Image.open(BytesIO(image_bytes))
     b64 = image_to_base64(img)
     data_url = f"data:image/png;base64,{b64}"
 
-    for _ in range(3):
+    for attempt in range(3):
         try:
             response = client.responses.create(
                 model="gpt-4o-mini",
@@ -64,11 +64,12 @@ def ocr_text_cached(image_bytes: bytes) -> str:
                 }],
                 max_output_tokens=600
             )
-            return response.output_text.strip()
+            return response.output_text.strip(), None
+
         except RateLimitError:
             time.sleep(2)
 
-    raise RuntimeError("OCR momentan überlastet. Bitte kurz warten.")
+    return None, "Die KI ist gerade kurz überlastet. Bitte gleich noch einmal versuchen."
 
 # ============================
 # FRESCH-ANALYSE
@@ -92,7 +93,7 @@ Strategien:
 - Ableiten
 - Merkwort
 
-Antwort NUR als JSON:
+ANTWORT NUR ALS JSON:
 [
   {{
     "wort": "Beispiel",
@@ -174,24 +175,29 @@ if uploaded:
 
     if st.button("🔍 Auswerten"):
         with st.spinner("Ich schaue mir deinen Text an …"):
-            text = ocr_text_cached(uploaded.getvalue())
+            text, error = ocr_text_cached(uploaded.getvalue())
+
+        if error:
+            st.warning(error)
+            st.info("💡 Tipp: Warte kurz oder lade das Bild erneut hoch.")
+        else:
             feedback = fresch_analysis(text)
             result_img = annotate_image(image, feedback, fokus)
 
-        st.success("Fertig 😊")
-        st.image(result_img, caption="FRESCH-Feedback", width="stretch")
+            st.success("Fertig 😊")
+            st.image(result_img, caption="FRESCH-Feedback", width="stretch")
 
-        if modus == "👧 Kind":
-            st.subheader("📘 Kleine Hilfe")
-            for item in feedback:
-                if item["fehler"] and (not fokus or item["regel"] == fokus):
-                    st.write(item["erklaerung"])
+            if modus == "👧 Kind":
+                st.subheader("📘 Kleine Hilfe")
+                for item in feedback:
+                    if item["fehler"] and (not fokus or item["regel"] == fokus):
+                        st.write(item["erklaerung"])
 
-        if modus == "👩‍🏫 Lehrkraft":
-            st.subheader("📊 Übersicht")
-            stats = {}
-            for item in feedback:
-                if item["fehler"]:
-                    stats[item["regel"]] = stats.get(item["regel"], 0) + 1
-            for regel, anzahl in stats.items():
-                st.write(f"{regel}: {anzahl}×")
+            if modus == "👩‍🏫 Lehrkraft":
+                st.subheader("📊 Übersicht")
+                stats = {}
+                for item in feedback:
+                    if item["fehler"]:
+                        stats[item["regel"]] = stats.get(item["regel"], 0) + 1
+                for regel, anzahl in stats.items():
+                    st.write(f"{regel}: {anzahl}×")
