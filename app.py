@@ -1,3 +1,7 @@
+import streamlit as st
+st.error("🔥 DIESE DATEI LÄUFT 🔥")
+
+
 # Mini-FRESCH-KI-Tutor
 # Streamlit Web-App – Foto hochladen, FRESCH-Rechtschreibung auswerten
 # Website-Version mit OpenAI (API v1) + Vision + PIN-geschütztem Lehrer-Modus
