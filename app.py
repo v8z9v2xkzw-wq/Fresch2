@@ -13,6 +13,16 @@ st.set_page_config(page_title="FRESCH KI-Tutor", layout="centered")
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # ============================
+# SESSION STATE INIT
+# ============================
+if "image_bytes" not in st.session_state:
+    st.session_state.image_bytes = None
+if "image_preview" not in st.session_state:
+    st.session_state.image_preview = None
+if "feedback" not in st.session_state:
+    st.session_state.feedback = None
+
+# ============================
 # FRESCH-ICONS
 # ============================
 FRESCH_ICONS = {
@@ -24,18 +34,29 @@ FRESCH_ICONS = {
 }
 
 # ============================
-# HILFSFUNKTION
+# HILFSFUNKTIONEN
 # ============================
 def image_to_base64(img: Image.Image) -> str:
     buf = BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
+def extract_text_from_response(response) -> str | None:
+    """
+    Robustes Auslesen von Text aus der OpenAI Responses API
+    """
+    for item in response.output:
+        if item.get("type") == "message":
+            for content in item.get("content", []):
+                if content.get("type") == "output_text":
+                    return content.get("text", "").strip()
+    return None
+
 # ============================
-# OCR (IMMER MIT RÜCKMELDUNG)
+# OCR
 # ============================
 @st.cache_data(show_spinner=False)
-def ocr_text(image_bytes: bytes):
+def ocr_text(image_bytes: bytes) -> str | None:
     img = Image.open(BytesIO(image_bytes))
     data_url = f"data:image/png;base64,{image_to_base64(img)}"
 
@@ -48,7 +69,11 @@ def ocr_text(image_bytes: bytes):
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "Lies den handgeschriebenen deutschen Text. Gib nur den Text zurück."
+                            "text": (
+                                "Lies jeden erkennbaren deutschen Text im Bild "
+                                "(handschriftlich oder gedruckt, auch grauer Text). "
+                                "Gib ausschließlich den Text zurück."
+                            )
                         },
                         {
                             "type": "input_image",
@@ -58,48 +83,37 @@ def ocr_text(image_bytes: bytes):
                 }],
                 max_output_tokens=500
             )
-            text = response.output_text.strip()
+
+            text = extract_text_from_response(response)
             if text:
                 return text
+
         except RateLimitError:
             time.sleep(2)
 
-    return None  # bewusst: nichts erkannt
+    return None
 
 # ============================
 # FRESCH-ANALYSE
 # ============================
 def fresch_analysis(text: str):
     prompt = f"""
-Du bist eine Grundschullehrkraft und arbeitest streng nach der FRESCH-Methode.
+Du arbeitest streng nach der FRESCH-Methode.
+Beurteile ausschließlich Rechtschreibung.
 
-REGELN:
-- Nur Rechtschreibung
-- Nur FRESCH-Strategien
-- Kindgerecht
-- Keine Korrekturen
-
-Strategien:
-- Silbe klatschen
-- Weiterschwingen
-- Stopp-Regel
-- Ableiten
-- Merkwort
-
-ANTWORT NUR ALS JSON:
+ANTWORTE NUR ALS GÜLTIGES JSON:
 [
   {{
     "wort": "Beispiel",
     "fehler": true,
     "regel": "Silbe klatschen",
-    "erklaerung": "Kurze Hilfe"
+    "erklaerung": "Kurze kindgerechte Hilfe"
   }}
 ]
 
 Text:
 {text}
 """
-
     response = client.responses.create(
         model="gpt-4o-mini",
         input=prompt,
@@ -107,61 +121,57 @@ Text:
         max_output_tokens=800
     )
 
-    return json.loads(response.output_text)
-
-# ============================
-# ICONS INS BILD
-# ============================
-def annotate_image(image: Image.Image, feedback, fokus):
-    img = image.copy().convert("RGBA")
-    y = 20
-
-    for item in feedback:
-        if item["fehler"] and item["regel"] == fokus:
-            try:
-                icon = Image.open(FRESCH_ICONS[item["regel"]]).convert("RGBA").resize((80, 80))
-                img.paste(icon, (20, y), icon)
-                y += 100
-            except:
-                pass
-
-    return img
+    text_output = extract_text_from_response(response)
+    return json.loads(text_output)
 
 # ============================
 # UI
 # ============================
 st.title("✏️ FRESCH KI-Tutor")
 
-fokus = st.selectbox(
-    "🎯 Wir üben heute:",
-    list(FRESCH_ICONS.keys())
-)
+fokus = st.selectbox("🎯 Wir üben heute:", list(FRESCH_ICONS.keys()))
 
 uploaded = st.file_uploader(
-    "📸 Mach ein Foto von deinem Text",
+    "📸 Foto vom Text hochladen",
     type=["png", "jpg", "jpeg"]
 )
 
 # ============================
-# AUSWERTUNG
+# DATEI SICHERN
 # ============================
 if uploaded:
-    image = Image.open(uploaded)
-    st.image(image, caption="Dein Text", width="stretch")
+    st.session_state.image_bytes = uploaded.getvalue()
+    st.session_state.image_preview = Image.open(uploaded)
 
+# ============================
+# VORSCHAU
+# ============================
+if st.session_state.image_preview:
+    st.image(
+        st.session_state.image_preview,
+        caption="Dein Text",
+        use_container_width=True
+    )
+
+# ============================
+# AUSWERTUNG
+# ============================
+if st.session_state.image_bytes:
     if st.button("🔍 Auswerten"):
         with st.spinner("Ich schaue mir deinen Text an …"):
-            text = ocr_text(uploaded.getvalue())
+            text = ocr_text(st.session_state.image_bytes)
 
-        if not text:
-            st.info("😊 Ich konnte den Text noch nicht lesen. Versuch es bitte nochmal.")
+        if text:
+            st.session_state.feedback = fresch_analysis(text)
+            st.success("Fertig 😊")
         else:
-            feedback = fresch_analysis(text)
-            result = annotate_image(image, feedback, fokus)
+            st.info("😊 Ich konnte den Text noch nicht lesen. Versuch es bitte nochmal.")
 
-            st.image(result, caption="Dein Feedback", width="stretch")
-
-            st.subheader("📘 Kleine Hilfe")
-            for item in feedback:
-                if item["fehler"] and item["regel"] == fokus:
-                    st.write(item["erklaerung"])
+# ============================
+# ERGEBNIS
+# ============================
+if st.session_state.feedback:
+    st.subheader("📘 Kleine Hilfe")
+    for item in st.session_state.feedback:
+        if item["fehler"] and item["regel"] == fokus:
+            st.write(item["erklaerung"])
